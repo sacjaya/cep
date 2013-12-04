@@ -5,7 +5,9 @@ import org.wso2.carbon.cep.core.Bucket;
 import org.wso2.carbon.cep.core.Query;
 import org.wso2.carbon.cep.wihidum.core.broker.RemoteBrokerDeployer;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,14 +23,14 @@ public class JoinSplitter {
     private static final String DISTRIBUTED_PROCESSING = "siddhi.enable.distributed.processing";
 
 
-    public Map<String, Bucket> getBucketList(Bucket bucket) {
+    public Map<String, List<Bucket>> getBucketList(Bucket bucket) {
         logger.info("Distributing join operator");
         return splitJoinQuery(bucket);
     }
 
 
-    private Map<String, Bucket> splitJoinQuery(Bucket bucket) {
-        Map<String, Bucket> bucketMap = new HashMap<String, Bucket>();
+    private Map<String, List<Bucket>> splitJoinQuery(Bucket bucket) {
+        Map<String, List<Bucket>> bucketMap = new HashMap<String, List<Bucket>>();
         Bucket subBucket = new Bucket();
         subBucket.setDescription(bucket.getDescription());
         subBucket.setEngineProvider(bucket.getEngineProvider());
@@ -57,7 +59,10 @@ public class JoinSplitter {
             {
                 remoteBucketDeployer.deploy(originalQuery.getOutput().getBrokerName(),ip);
             }
-            bucketMap.put(ip,subBucket);
+            List<Bucket> bucketsList = new ArrayList<Bucket>();
+            bucketsList.add(subBucket);
+            bucketMap.put(ip, bucketsList);
+            //bucketMap.put(ip,subBucket);
         }
         return  bucketMap;
     }

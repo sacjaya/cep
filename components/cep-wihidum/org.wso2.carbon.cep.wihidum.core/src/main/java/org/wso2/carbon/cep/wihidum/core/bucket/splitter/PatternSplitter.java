@@ -30,6 +30,8 @@ public class PatternSplitter {
 
     private static Logger logger = Logger.getLogger(PatternSplitter.class);
     private static final String DISTRIBUTED_PROCESSING = "siddhi.enable.distributed.processing";
+    Map<String, List<Bucket>> bucketMap = new HashMap<String, List<Bucket>>();
+
 
     //from e1 = cseEventStream [ price >= 50 and volume > 100 ] -> e2 = cseEventStream [price <= 40 ] <:5>
     // -> e3 = cseEventStream [volume <= 70 ] insert into StockQuote e1.symbol as symbol1,e2[0].symbol as symbol2,e3.symbol as symbol3 ;
@@ -40,15 +42,14 @@ public class PatternSplitter {
     //insert into StockQuote
     //a1.action as action, b1.price as price
 
-    public Map<String, Bucket> getBucketList(Bucket bucket) {
+    public Map<String, List<Bucket>> getBucketList(Bucket bucket) {
         logger.info("Distributing pattern operator");
         return splitPatternQuery(bucket, bucket.getQueries().get(0));
 
     }
 
 
-    private Map<String, Bucket> splitPatternQuery(Bucket bucket, Query patternQuery) {
-        Map<String, Bucket> bucketMap = new HashMap<String, Bucket>();
+    private Map<String, List<Bucket>> splitPatternQuery(Bucket bucket, Query patternQuery) {
 
         List<String> ipList = patternQuery.getIpList();
         String queryText = patternQuery.getExpression().getText();
@@ -60,7 +61,7 @@ public class PatternSplitter {
         //creating a separate bucket for each condition
         for (i = 0; i < conditions.length; i++) {
 
-            logger.info("Adding query for "+i+1+" condition of the pattern query");
+            logger.info("Adding query for "+(i+1)+" condition of the pattern query");
             Query subQuery = new Query();
             String expression;
             String inputStreamWithCondition = conditions[i].substring(conditions[i].indexOf("=") + 1, conditions[i].indexOf("]") + 1);
@@ -139,7 +140,43 @@ public class PatternSplitter {
             subBucket.setQueries(queryList);
 
 
-            bucketMap.put(patternQuery.getIpList().get(i), subBucket);
+            int IPListSize = patternQuery.getIpList().size();
+
+            if(conditions.length==IPListSize-1)  {
+                putBucket(patternQuery.getIpList().get(i),subBucket );
+               // bucketMap.put(patternQuery.getIpList().get(i), subBucket);
+            }
+
+            else if(conditions.length>IPListSize-1)  {
+                if(i>= IPListSize-1){
+                    putBucket(patternQuery.getIpList().get(i%(IPListSize-1)),subBucket );
+                  //  bucketMap.put(patternQuery.getIpList().get(i%(IPListSize-1)), subBucket);
+                }
+                else{
+                    putBucket(patternQuery.getIpList().get(i),subBucket );
+                    //bucketMap.put(patternQuery.getIpList().get(i), subBucket);
+                }
+            }
+
+            else if(conditions.length<IPListSize-1)  {
+                int n = (IPListSize-1)/conditions.length;
+
+                int j;
+                for(j = n*i;j<n*i+n;j++)   {
+                    putBucket(patternQuery.getIpList().get(j),subBucket );
+                }
+
+
+                if(i==conditions.length-1) {
+                    for(j = n*i+n;j<=IPListSize-2;j++)   {
+                        putBucket(patternQuery.getIpList().get(j),subBucket );
+                    }
+                }
+
+
+
+
+            }
 
 
         }
@@ -195,8 +232,24 @@ public class PatternSplitter {
             remoteBucketDeployer.deploy(output.getBrokerName(),ipList.get(ipList.size() - 1));
         }
 
-        bucketMap.put(ipList.get(ipList.size() - 1), patternBucket);
+        putBucket(ipList.get(ipList.size() - 1),patternBucket );
+        //bucketMap.put(ipList.get(ipList.size() - 1), patternBucket);
         return bucketMap;
+    }
+
+
+    private void putBucket(String ip, Bucket subBucket)  {
+        if(bucketMap.containsKey(ip))     {
+            List<Bucket> bucketsList = bucketMap.get(ip);
+            bucketsList.add(subBucket);
+            bucketMap.put(ip,bucketsList);
+
+        }
+        else{
+            List<Bucket> bucketsList = new ArrayList<Bucket>();
+            bucketsList.add(subBucket);
+            bucketMap.put(ip, bucketsList);
+        }
     }
 
 }

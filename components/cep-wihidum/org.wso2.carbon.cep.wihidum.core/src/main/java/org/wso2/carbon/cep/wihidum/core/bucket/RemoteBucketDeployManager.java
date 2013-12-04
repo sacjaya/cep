@@ -36,12 +36,15 @@ public class RemoteBucketDeployManager implements DistributingWihidumValueHolder
               synchronized (distributingBucketProvider){
                 Bucket bucket = distributingBucketProvider.getBucket();
                   setClusterConfigs(bucket);
-                Map<String,Bucket> map =  bucketSplitter.getBucketList(bucket);
+                Map<String,List<Bucket>> map =  bucketSplitter.getBucketList(bucket);
                   logger.info("Map Size" +map.size());
                  for(String key : map.keySet()){
                      try {
-                         remoteBucketDeployer.deploy(key,map.get(key));
-                         logger.info("run deploy in after splitting buckets  bucket is " +map.get(key).getName());
+                         for(Bucket bucketToDeploy: map.get(key)){
+                             remoteBucketDeployer.deploy(key,bucketToDeploy);
+                             logger.info("run deploy in after splitting buckets  bucket is " +bucketToDeploy.getName());
+                         }
+
                      } catch (Exception e){
                          logger.info(e.getMessage());
                      }

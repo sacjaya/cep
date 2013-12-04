@@ -17,13 +17,15 @@ import java.util.Map;
 
 public class BucketSplitter {
 
-    public Map<String, Bucket> getBucketList(Bucket bucket){
-        Map<String, Bucket> bucketMap = new QuerySplitter().getBucketList(bucket);
+    public Map<String, List<Bucket>> getBucketList(Bucket bucket){
+        Map<String, List<Bucket>> bucketMap = new QuerySplitter().getBucketList(bucket);
         List<Loadbalancer> loadbalancerList = bucket.getLoadbalancerList();
             if(loadbalancerList.size()>0){
                 for(Loadbalancer loadbalancer:loadbalancerList){
+                    List<Bucket> bucketlbList = new ArrayList<Bucket>();
                     Bucket bucketlb =  createBucketForLB(loadbalancer);
-                    bucketMap.put(loadbalancer.getIp(),bucketlb);
+                    bucketlbList.add(bucketlb);
+                    bucketMap.put(loadbalancer.getIp(),bucketlbList);
                 }
             }
         return bucketMap;

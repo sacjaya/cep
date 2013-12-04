@@ -30,40 +30,67 @@ import java.util.Map;
  * User: sachini
  * Date: 8/15/13
  * Time: 12:51 PM
- * To change this template use File | Settings | File Templates.
  *
  */
 
 
 /**
- * Split a complex query which contains a filter and a window
+ * Split the master query
  */
 public class QuerySplitter {
 
     private static Logger logger = Logger.getLogger(QuerySplitter.class);
 
     private static final String DISTRIBUTED_PROCESSING = "siddhi.enable.distributed.processing";
+    private static final String LOCAL_AGENT_BROKER = "localAgentBroker";
+    private static final String PATTERN = "->";
+    private static final String JOIN = "join";
 
 
-    public Map<String, Bucket> getBucketList(Bucket bucket) {
-        if (bucket.getQueries().get(0).getExpression().getText().contains("->")) {
+
+    /**
+     * create sub buckets from master bucket
+     *
+     * @param bucket
+     * @return bucket with IP address of the node to be deployed
+     */
+    public Map<String, List<Bucket>> getBucketList(Bucket bucket) {
+
+        if (bucket.getQueries().get(0).getExpression().getText().contains(PATTERN)) {
+            logger.info("sending to distribute pattern operator");
             return new PatternSplitter().getBucketList(bucket);
-        }
-
-        if (bucket.getQueries().get(0).getExpression().getText().contains("join")) {
+        } else if (bucket.getQueries().get(0).getExpression().getText().contains(JOIN)) {
+            logger.info("sending to distribute join operator");
             return new JoinSplitter().getBucketList(bucket);
         }
 
         Map<String, Object> streamDefinitionMap = new HashMap<String, Object>();
-        Map<String, Bucket> bucketMap = new HashMap<String, Bucket>();
+        Map<String, List<Bucket>> bucketMap = new HashMap<String, List<Bucket>>();
+
         List<Query> queryList = bucket.getQueries();
+
+        //identifying input streams and output streams
         setInputOutput(queryList);
+
         for (Query query : queryList) {
             List<String> ipList = query.getIpList();
             if (!ipList.isEmpty()) {
                 for (String ip : ipList) {
+
+                    //create sub-bucket
                     Bucket subBucket = createBucket(bucket, query, streamDefinitionMap);
-                    bucketMap.put(ip, subBucket);
+
+                    if (bucketMap.containsKey(ip)) {
+                        List<Bucket> bucketsList = bucketMap.get(ip);
+                        bucketsList.add(subBucket);
+                        bucketMap.put(ip, bucketsList);
+
+                    } else {
+                        List<Bucket> bucketsList = new ArrayList<Bucket>();
+                        bucketsList.add(subBucket);
+                        bucketMap.put(ip, bucketsList);
+                    }
+
                 }
             }
         }
@@ -71,7 +98,16 @@ public class QuerySplitter {
         return bucketMap;
     }
 
-    private Bucket createBucket(Bucket bucket, Query query,  Map<String, Object> streamDefinitionMap) {
+
+    /**
+     * create sub bucket
+     *
+     * @param bucket
+     * @param query
+     * @param streamDefinitionMap
+     * @return
+     */
+    private Bucket createBucket(Bucket bucket, Query query, Map<String, Object> streamDefinitionMap) {
         Bucket subBucket = new Bucket();
         subBucket.setMaster(false);
         subBucket.setProviderConfigurationProperties(bucket.getProviderConfigurationProperties());
@@ -91,39 +127,41 @@ public class QuerySplitter {
             }
         }
 
+        //add query to the sub bucket
         Query subQuery = new Query();
         subQuery.setExpression(query.getExpression());
         subQuery.setName(query.getName());
 
+        //add output of the query
         Output output = query.getOutput();
         Output subQueryOutput = new Output();
         subQueryOutput.setOutputMapping(output.getOutputMapping());
         subQueryOutput.setTopic(output.getTopic());
 
-        if(getOutputBroker(bucket, query) != null){
-        subQueryOutput.setBrokerName(getOutputBroker(bucket, query));
+        if (getOutputBroker(bucket, query) != null) {
+            subQueryOutput.setBrokerName(getOutputBroker(bucket, query));
         }
 
         subQuery.setOutput(subQueryOutput);
         streamDefinitionMap.put(query.getOutputStream(), output);
 
-
         List<Query> subQueryList = new ArrayList<Query>();
         subQueryList.add(subQuery);
         subBucket.setQueries(subQueryList);
 
+        //add inputs to the sub bucket
         List<Input> subQueryInputs = new ArrayList<Input>();
         List<String> queryInputStreams = query.getInputStreams();
         for (String inputStream : queryInputStreams) {
             Object inputStreamInfo = streamDefinitionMap.get(inputStream);
             if (inputStreamInfo != null && inputStreamInfo instanceof Input) {
                 Input input = (Input) inputStreamInfo;
-                input.setBrokerName("localAgentBroker");
+                input.setBrokerName(LOCAL_AGENT_BROKER);
                 subQueryInputs.add((Input) inputStreamInfo);
             } else if (inputStreamInfo != null && inputStreamInfo instanceof Output) {
                 Output outputToInput = (Output) inputStreamInfo;
                 Input subQueryInput = new Input();
-                subQueryInput.setBrokerName("localAgentBroker");
+                subQueryInput.setBrokerName(LOCAL_AGENT_BROKER);
                 subQueryInput.setTopic(outputToInput.getTopic());
                 subQueryInput.setInputMapping(adaptOutput(outputToInput, inputStream));
                 subQueryInputs.add(subQueryInput);
@@ -140,12 +178,19 @@ public class QuerySplitter {
     }
 
 
-    private String getOutputBroker(Bucket bucket, Query queryB) {
+    /**
+     * get output broker of the query
+     *
+     * @param bucket
+     * @param queryBroker
+     * @return
+     */
+    private String getOutputBroker(Bucket bucket, Query queryBroker) {
         List<String> outputBrokerip = new ArrayList<String>();
         for (Query query : bucket.getQueries()) {
 
             for (String inputStream : query.getInputStreams()) {
-                if (queryB.getOutputStream().equalsIgnoreCase(inputStream)) {
+                if (queryBroker.getOutputStream().equalsIgnoreCase(inputStream)) {
                     for (String ip : query.getIpList()) {
                         outputBrokerip.add(ip);
                     }
@@ -155,22 +200,33 @@ public class QuerySplitter {
             }
 
         }
-        if (outputBrokerip.size() > 0)  {
+
+
+        if (outputBrokerip.size() > 0) {
             return outputBrokerip.get(0);
         }
 
-        else  if(queryB.getOutput().getBrokerName()!=null){
-            RemoteBrokerDeployer remoteBucketDeployer = RemoteBrokerDeployer.getInstance();
-            for(String ip : queryB.getIpList())    {
-                remoteBucketDeployer.deploy(queryB.getOutput().getBrokerName(), ip);
+        //deploy the output broker
+        else if (queryBroker.getOutput().getBrokerName() != null) {
+            RemoteBrokerDeployer remoteBrokerDeployer = RemoteBrokerDeployer.getInstance();
+
+            for (String ip : queryBroker.getIpList()) {
+                remoteBrokerDeployer.deploy(queryBroker.getOutput().getBrokerName(), ip);
             }
-            return queryB.getOutput().getBrokerName();
-            //return "externalAgentBroker";
+            return queryBroker.getOutput().getBrokerName();
+
         }
         return null;
     }
 
 
+    /**
+     * converting outputs to inputs
+     *
+     * @param outputToInput
+     * @param inputStream
+     * @return
+     */
     private InputMapping adaptOutput(Output outputToInput, String inputStream) {
 
         OutputMapping outputMapping = outputToInput.getOutputMapping();
@@ -222,39 +278,16 @@ public class QuerySplitter {
 
         }
 
-//        if(outputMapping instanceof MapOutputMapping){
-//            MapInputMapping mapInputMapping = new MapInputMapping();
-//            mapInputMapping.setStream(inputStream);
-//
-//            List<MapInputProperty> properties = new ArrayList<MapInputProperty>();
-//
-//            MapOutputMapping mapOutputMapping = (MapOutputMapping) outputMapping;
-//            List<MapOutputProperty> mapOutputProperties = mapOutputMapping.getPropertyList();
-//
-//            for(MapOutputProperty property : mapOutputProperties){
-//                MapInputProperty mapInputProperty = new MapInputProperty();
-//                mapInputProperty.setInputName(property.getName());
-//             ////////////////////////////////////////////////////////////
-//               mapInputProperty.setType(property.getValueOf());
-//             //////////////////////////////////////////////////
-//                mapInputProperty.setName(property.getName());
-//                mapInputMapping.addProperty(mapInputProperty);
-//            }
-//
-//            return mapInputMapping;
-//
-//        }
-//        if(outputMapping instanceof XMLOutputMapping)  ;
-
-
-        //////////////////////// //////////////////////
-        // if(outputMapping instanceof TextOutputMapping);
-        /////////////////////////////////////////////////
-
 
         return null;
     }
 
+
+    /**
+     * identify input streams and output streams of queries
+     *
+     * @param queryList
+     */
     private void setInputOutput(List<Query> queryList) {
         for (Query query : queryList) {
             String queryText = query.getExpression().getText();
